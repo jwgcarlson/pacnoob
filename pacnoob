@@ -1,0 +1,61 @@
+#!/bin/bash -e
+
+DIFF=diff
+PACMAN_LOCAL=/var/lib/pacman/local
+DIVIDER=$(printf '%*s\n' "${COLUMNS:-$(tput cols)}" '' | tr ' ' -)
+
+if command -v colordiff >/dev/null; then
+    DIFF=colordiff
+fi
+
+# Print package files that were backed up by a previous upgrade.
+function get_backup_files() {
+    local line filename backup_start
+    while read -r line; do
+        # Strip :%BACKUP% off from the end.
+        line=${line%:*}
+
+        # Get the filename and line number of the match.
+        filename=${line%:*}
+        backup_start=${line##*:}
+
+        # Print all %BACKUP% files.
+        tail -n +$((backup_start + 1)) "$filename" | grep -v '^$' | cut -f1
+    done < <(grep -n -m1 '^%BACKUP%$' /var/lib/pacman/local/*/files)
+}
+
+for pkgfile in $(get_backup_files); do
+    if [ -e "/$pkgfile.pacnew" ]; then
+        while true; do
+            echo $DIVIDER
+            # Show diff between current and new.
+            sudo $DIFF -u "/$pkgfile" "/$pkgfile.pacnew" | less -FR
+
+            echo
+            read -p "> Keep (c)urrent, use (n)ew, (e)dit and ask again, (q)uit? "
+            case $REPLY in
+                c)
+                    sudo rm /$pkgfile.pacnew
+                    break ;;
+                n)
+                    sudo mv /$pkgfile.pacnew /$pkgfile 
+                    break ;;
+                e)
+                    # Be careful about editing sensitive files.
+                    if [[ "$pkgfile" = etc/sudoers* ]]; then
+                        sudo visudo -f /$pkgfile && sudo -e /$pkgfile.pacnew
+                    elif [[ "$pkgfile" = etc/passwd ]]; then
+                        sudo vipw && sudo -e /etc/passwd.pacnew
+                    elif [[ "$pkgfile" = etc/group ]]; then
+                        sudo vigr && sudo -e /etc/group.pacnew
+                    else
+                        sudo -e /$pkgfile{,.pacnew}
+                    fi
+                    ;;
+                q)
+                    exit 0
+                    ;;
+            esac
+        done
+    fi
+done
